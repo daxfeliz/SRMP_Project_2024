@@ -199,8 +199,11 @@ def BLS_function(starname, input_lc,
     
     #plotting power spectram AKA periodogram
     fig=plt.figure(figsize=(10,5))
-    ax1=fig.add_subplot(211)
-    ax2=fig.add_subplot(212)
+    ax0=fig.add_subplot(311)
+    ax1=fig.add_subplot(312)
+    ax2=fig.add_subplot(313)
+    
+    input_lc.scatter(ax=ax0,s=2,color='black')
     
     bls.plot(color='black',lw=2,ax=ax1)
     ax1.set_title(starname+' BLS Power Spectrum')
@@ -235,10 +238,195 @@ def BLS_function(starname, input_lc,
     return planet_period.value, planet_t0.value, planet_dur.value
 
 
+def catalog_info(TIC_ID):
+    """Takes TIC_ID, returns stellar information from online catalog using Vizier.
+    Input Parameters
+    ----------
+    TIC_ID : int
+        TESS Input Catalog ID number to search for and analyze.
+        
+    Returns
+    -------
+        A list of select stellar parameters.
+        * (a,b): quadratic limb darkening coefficients cross-matched from 
+        limb darkening Claret et al. (2012) tables based on Effective Temperature
+        and Surface Gravity of target star (according to the TIC).
+        * mass: Stellar Mass (from the TIC) in units of solar masses.
+        * mass_min, mass_max: Uncertainty of Stellar Mass (from the TIC) in units of solar masses.
+        * radius: Stellar Radius (from the TIC) in units of solar radii.
+        * radius_min, radius_max: Uncertainty of Stellar Radius (from the TIC) in units of solar radii.
+          
+    """
+    import requests
+    import numpy
+    from os import path
+    import time as clock
+    try:
+        from astroquery.mast import Catalogs
+    except:
+        raise ImportError("Package astroquery required but failed to import")
+    #
+    #
+    #
+    result = Catalogs.query_criteria(catalog="Tic", ID=TIC_ID).as_array()
+    Teff = float(result['Teff'].data)
+    logg = float(result['logg'].data)
+    radius = float(result['rad'].data)
+    radius_max = float(result['e_rad'].data)
+    radius_min = float(result['e_rad'].data)
+    mass = float(result['mass'].data)
+    mass_max = float(result['e_mass'].data)
+    mass_min = float(result['e_mass'].data)
+    
+    return (mass, mass_min, mass_max, radius, radius_min, radius_max)
+
+def SMA_AU_from_Period_to_stellar(Period,R_star,M_star):
+    """
+    This function will calculate the Semi-Major Axis (SMA)
+    using Kepler's third law.
+    
+    Input Parameters
+    ----------
+    Period : float
+        Orbital period in days
+    R_star : float
+        Stellar Radius in solar radii
+    M_star : float
+        Stellar Mass in solar masses
+    Returns
+    -------
+        * SMA
+            Semi-Major Axis in solar units
+        * SMA_cm
+            Semi-Major Axis in units of centimeters        
+    """
+    #assumes circular orbit
+    #using Kepler's third law, calculate SMA
+    #solar units
+    import astropy.units as u
+    from astropy import constants as const
+    RS = u.R_sun.to(u.cm) # in cm
+    MS = u.M_sun.to(u.g) # in grams
+    #
+    G = const.G.cgs.value #cm^3 per g per s^2
+    #
+    R = R_star*RS
+    M = M_star*MS
+    P=Period*60.0*24.0*60.0 #in seconds
+    #
+    #SMA
+    SMA_cm = ((G*M*(P**2))/(4*(np.pi**2)))**(1/3)
+    #
+    #note R_star is already in solar units so we need to convert to cm using
+    # solar radius as a constant
+    Stellar_Radius = R #now in cm
+    #
+    SMA = SMA_cm / Stellar_Radius #now unitless (cm / cm)
+    return SMA, SMA_cm
+
+def Tdur(Period, R_star,M_star, R_planet_RE):
+    """
+    This function will calculate the transit duration
+    time based on Kepler's third law. 
+    Input Parameters
+    ----------
+    Period : float
+        Orbital period in days
+    R_star : float
+        Stellar Radius in Solar radii
+    M_star : float
+        Stellar Mass in Solar masses
+    R_planet_RE: float
+        Planet radius in Earth Radii
+
+    Returns
+    -------
+        * Tdur : float
+            Estimated transit duration time in units of days
+    """
+    from astropy import units as u
+
+    RE = u.R_earth.to(u.cm) # in cm
+    RS = u.R_sun.to(u.cm) # in cm
+    A = Period/np.pi #in days
+    #
+    SMA_cm = SMA_AU_from_Period_to_stellar(Period,R_star,M_star)[1]
+    #
+    B =(R_star*RS +R_planet_RE*RE)/ SMA_cm # unitless (cm/cm)
+    #
+    T_dur = A*np.arcsin(B) #in days
+    return T_dur    
+
+def smoothing_function(ID,input_LC,window_size_in_days=None,verbose=True,filter_type='biweight'):
+    """   
+    This function will smooth the input light curve. If no window size is
+    provided, a window size corresponding to 3 times the transit duration
+    of an Earth-sized planet eclipsing this target star will be used.
+    Input Parameters
+    ----------
+    ID : int
+        TESS Input Catalog identification number
+    input_LC : pandas dataframe
+        Input NEMESIS light curve to be smoothed
+    window_size_in_days : float or None
+        Desired smoothing window in units of days. Default is set to None.
+    verbose : boolean
+        This flag is used to print the window size used for smoothing.
+    Returns
+     -------
+    * newlc : Lightkurve LightCurve object
+        This Detrended Light Curve contains the follow column names:
+        * time
+        * flux #this is detrended flux
+        * flux_err #this is detrended flux error
+    * trend : Lightkurve LightCurve object
+        This trend Light Curve contains the follow column names:
+        * time
+        * flux #this is smoothed lightcurve trend line
+        * flux_err #this is detrended flux error (same as input_LC.flux_err)
+    """
+    from wotan import flatten
+    import numpy as np
+    import lightkurve as lk
+    #
+    #
+    #read in LC data
+    time = input_LC.time.value
+    flux_raw = input_LC.flux.value
+    flux_error = input_LC.flux_err.value
+    #
+    if window_size_in_days==None:
+        LCDur=(np.nanmax(time) - np.nanmin(time))
+        maxP = LCDur/2 #longest period for 2 transits in a light curve (~14 days for TESS single sector LCs)
+        R_planet_RE = 1
+        M_star, M_star_min, M_star_max, R_star, R_star_min, R_star_max = catalog_info(TIC_ID=ID)
+        window_size_in_days = 5*Tdur(maxP, R_star,M_star, R_planet_RE)
+    if verbose==True:
+        print('window size (days): ',window_size_in_days)
+    flatten_lc, trend_lc = flatten(time, flux_raw, window_length=window_size_in_days, \
+                                   return_trend=True, method=filter_type,robust=True)
+    T=time
+    F=flatten_lc
+    FE=flux_error
+    #checking for NaNs
+    nanmask = np.where(np.isfinite(F)==True)[0]
+    T = T[nanmask]
+    F = F[nanmask]
+    FE =FE[nanmask]
+    F_raw = flux_raw[nanmask]
+    trend_lc=trend_lc[nanmask]
+    newlc = lk.LightCurve(time=T,flux=F,flux_err=FE)
+    trend = lk.LightCurve(time=time[nanmask],flux=trend_lc,flux_err=flux_error[nanmask])
+    return newlc, trend
+
+
+
+
 def pipeline(starname, author, mask_threshold, nsigma, save_directory,
+             window_size_in_days,filter_type,
              min_period,max_period,N_periods,
              min_dur, max_dur, N_durations,
-             frequency_factor):
+             frequency_factor,verbose):
     '''
     This function is used to extract single sector TESS light curves. 
     Currently, this function will only grab the first set of TESS 
@@ -248,22 +436,37 @@ def pipeline(starname, author, mask_threshold, nsigma, save_directory,
     
     Inputs
     ------------------------------------------------------
-        starname: Name of the star. Ex: 'TIC 12345678',
-        'Proxima Centauri'. Object type: string, str
-        author: 'Source of the TESS data. Ex: SPOC,
-        TESS-SPOC, QLP'. Object type: string, str 
-        nsigma: The number of standard deviations above and below 
-        the median of our light curves to remove data from. type: float    
-        save_directory: location on computer where figures are saved
-        mask_threshold: Input value for aperture selection.  type: float or NoneType.
-        min_period: minimum period for the blind BLS transit search, floats
-        max_period: maximum period for the blind BLS transit search, floats
-        N_periods: the number of periods in our period grid, integer
-        min_dur: minimum duration for the blind BLS transit search, floats
-        max_dur: maximum duration for the blind BLS transit search, floats
-        N_durations: the number of periods in our period grid, integer        
+        starname: 
+            Name of the star. Ex: 'TIC 12345678', 'Proxima Centauri'. Object type: string, str
+        author: 
+            'Source of the TESS data. Ex: SPOC,TESS-SPOC, QLP'. Object type: string, str 
+        nsigma: 
+            The number of standard deviations above and below 
+            the median of our light curves to remove data from. type: float    
+        save_directory: 
+            location on computer where figures are saved, type: str
+        mask_threshold: 
+            Input value for aperture selection. type: float or NoneType.
+        window_size_in_days: 
+            Input value for smoothing. type: float or NoneType
+        filter_type: 
+            string, 'biweight' by default. See Wotan documentation for other options.
+        min_period: 
+            minimum period for the blind BLS transit search, floats
+        max_period: 
+            maximum period for the blind BLS transit search, floats
+        N_periods: 
+            the number of periods in our period grid, integer
+        min_dur: 
+            minimum duration for the blind BLS transit search, floats
+        max_dur: 
+            maximum duration for the blind BLS transit search, floats
+        N_durations: 
+            the number of periods in our period grid, integer        
         frequency_factor: the frequency spacing in between periods 
                           of the power spectrum, integer
+      verbose: 
+          boolean, used for printing debugging checks
     
     Outputs
     ------------------------------------------------------
@@ -290,12 +493,18 @@ def pipeline(starname, author, mask_threshold, nsigma, save_directory,
     # Rename output light curve from Step 1:
     input_lc = outlier_removed_normalized_bkg_subtracted_lc
     
-    # Step 2: search lightcurve for transits with BLS
-    planet_period, planet_t0, planet_dur = BLS_function(starname=starname, input_lc=input_lc,
+    # Step 2: Smoothing light curve before transit searching (NEW STEP)
+    ID=int(starname[4:]) #assuming it begins with 'TIC '
+    smoothed_lc,trend_lc = smoothing_function(ID,input_lc,
+                                              window_size_in_days=window_size_in_days,
+                                              verbose=verbose,filter_type=filter_type)
+    
+    # Step 3: search lightcurve for transits with BLS
+    planet_period, planet_t0, planet_dur = BLS_function(starname=starname, input_lc=smoothed_lc,
                                                         min_period=min_period, max_period=max_period, 
                                                         N_periods=N_periods,
                                                         min_dur=min_dur, max_dur=max_dur,N_durations=N_durations,
                                                         frequency_factor=frequency_factor)
     
-    
-    return input_lc, planet_period, planet_t0, planet_dur    
+    output_lc = smoothed_lc
+    return output_lc, planet_period, planet_t0, planet_dur    

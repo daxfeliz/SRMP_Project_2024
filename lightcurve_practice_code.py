@@ -243,6 +243,102 @@ def smoothing_function(ID,input_LC,window_size_in_days=None,verbose=True,filter_
     trend = lk.LightCurve(time=time[nanmask],flux=trend_lc,flux_err=flux_error[nanmask])
     return newlc, trend
 
+def extract_TESS_photometry(starname,author,nsigma,save_directory,mask_threshold=None):
+    '''
+    This function is used to extract single sector TESS light curves
+    . Currently, 
+    this function will only grab the first set of TESS observations
+    from the 
+    observation tables (search_result object).
+    
+    Inputs
+    ------------------------------------------------------
+        starname: Name of the star. Ex: 'TIC 12345678',
+        'Proxima Centauri'. Object type: string, str
+        author: 'Source of the TESS data. Ex: SPOC,
+        TESS-SPOC, QLP'. Object type: string, str 
+        nsigma: The number of standard deviations above and below 
+        the median of our light curves to remove data from. type: float    
+        save_directory: location on computer where figures are saved
+        mask_threshold: Input value for aperture selection. 
+        type: float or NoneType.
+    
+    Outputs
+    ------------------------------------------------------
+        outlier_removed_normalized_bkg_subtracted_lc: a lightkurve object containing
+        extracted TESS photometry that is background subtracted, outlier removed and
+        then normalized.
+    '''
+    #Step 0: import libraries we need
+    import lightkurve as lk
+    import matplotlib.pyplot as plt
+    
+    # Step 1: Search for TESS images (Target Pixel Files, or tpf)    
+    search_result = lk.search_targetpixelfile(starname,author=author)
+    
+    # recall, MAST has a weird change in their observations table
+    # -dataURL ---> dataURI
+    # to make sure it's included, let's use a try and except technique    
+    try:
+        tpf = search_result[0].download(quality_bitmask='hardest',download_dir=save_directory) 
+        #will download only first observation [0]
+    except KeyError:
+        search_result.table['dataURL']  = search_result.table['dataURI']
+        tpf = search_result[0].download(quality_bitmask='hardest',download_dir=save_directory)
+    
+    #Step 2: Perform aperture photometry
+    if mask_threshold is None:
+        pixel_mask = tpf.pipeline_mask
+        background_mask = ~tpf.pipeline_mask
+    if mask_threshold is not None:
+        pixel_mask = tpf.create_threshold_mask(threshold=mask_threshold)
+        background_mask = ~tpf.create_threshold_mask(threshold=mask_threshold)
+
+    lc = tpf.to_lightcurve(aperture_mask=pixel_mask)
+    bkg = tpf.to_lightcurve(aperture_mask=background_mask)
+    
+    #Step 3: Perform Background Subtraction and Normalization
+    bkg_subtracted_flux=lc.flux.value - bkg.flux.value
+    
+    #create new "LightCurve" object
+    bkg_subtracted_lc = lk.LightCurve(time=lc.time.value,
+                                      flux=bkg_subtracted_flux,
+                                      flux_err = lc.flux_err.value)
+    
+    # normalize the background subtracted light curve
+    normalized_bkg_subtracted_lc =  bkg_subtracted_lc.normalize()
+    
+    outlier_removed_normalized_bkg_subtracted_lc = normalized_bkg_subtracted_lc.remove_outliers(sigma_upper=nsigma)
+    
+    # Step 4: Visualize the light curve
+    fig=plt.figure(figsize=(10,5))
+    ax1=fig.add_subplot(221)
+    ax2=fig.add_subplot(222)
+    
+    tpf.plot(aperture_mask=pixel_mask,mask_color='red',
+             ax=ax1,show_colorbar=True)
+    tpf.plot(aperture_mask=background_mask,mask_color='pink',
+             ax=ax1,show_colorbar=False)
+    
+    
+    ax2.set_title(starname+' in Sector '+str(tpf.sector))
+    
+    ax2.plot(normalized_bkg_subtracted_lc.time.value,
+             normalized_bkg_subtracted_lc.flux.value,
+           marker='.',color='red',linestyle='none')
+    
+    ax2.plot(outlier_removed_normalized_bkg_subtracted_lc.time.value,
+             outlier_removed_normalized_bkg_subtracted_lc.flux.value,
+           marker='.',color='black',linestyle='none')    
+  
+    ax2.set_xlabel('Time [Days]')
+    ax2.set_ylabel('Normalized Relative Flux')
+    fig.tight_layout(pad=1)
+    plt.savefig(save_directory+starname+'_Sector_'+str(tpf.sector)+'_lightcurve.png',
+                bbox_inches='tight')
+    plt.show()
+    
+    return outlier_removed_normalized_bkg_subtracted_lc
 
 def extract_TESS_photometry_and_smooth(starname,author,nsigma,
                                        save_directory, mask_threshold=None,

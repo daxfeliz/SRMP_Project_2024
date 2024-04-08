@@ -37,9 +37,9 @@ def download_data(starname,mission,quarter_number,cadence,verbose=True):
     # #NEW
     if verbose==True:
         if mission=='TESS':        
-            print('Number of data products for ',starname,' in ',mission,' with ',cadence,' cadence and in Sector ',quarter_number,':',len(search_string.exptime.value))
+            print('Number of data products for ',starname,' in ',mission,' with \"',cadence,'\" cadence and in Sector \"',quarter_number,'\":',len(search_string.exptime.value))
         if mission=='Kepler':        
-            print('Number of data products for ',starname,' in ',mission,' with ',cadence,' cadence and in Quarter ',quarter_number,':',len(search_string.exptime.value))        
+            print('Number of data products for ',starname,' in ',mission,' with \"',cadence,'\" cadence and in Quarter \"',quarter_number,'\":',len(search_string.exptime.value))        
     # # NEW
     #
     # filter search result by cadence input argument
@@ -243,102 +243,6 @@ def smoothing_function(ID,input_LC,window_size_in_days=None,verbose=True,filter_
     trend = lk.LightCurve(time=time[nanmask],flux=trend_lc,flux_err=flux_error[nanmask])
     return newlc, trend
 
-def extract_TESS_photometry(starname,author,nsigma,save_directory,mask_threshold=None):
-    '''
-    This function is used to extract single sector TESS light curves
-    . Currently, 
-    this function will only grab the first set of TESS observations
-    from the 
-    observation tables (search_result object).
-    
-    Inputs
-    ------------------------------------------------------
-        starname: Name of the star. Ex: 'TIC 12345678',
-        'Proxima Centauri'. Object type: string, str
-        author: 'Source of the TESS data. Ex: SPOC,
-        TESS-SPOC, QLP'. Object type: string, str 
-        nsigma: The number of standard deviations above and below 
-        the median of our light curves to remove data from. type: float    
-        save_directory: location on computer where figures are saved
-        mask_threshold: Input value for aperture selection. 
-        type: float or NoneType.
-    
-    Outputs
-    ------------------------------------------------------
-        outlier_removed_normalized_bkg_subtracted_lc: a lightkurve object containing
-        extracted TESS photometry that is background subtracted, outlier removed and
-        then normalized.
-    '''
-    #Step 0: import libraries we need
-    import lightkurve as lk
-    import matplotlib.pyplot as plt
-    
-    # Step 1: Search for TESS images (Target Pixel Files, or tpf)    
-    search_result = lk.search_targetpixelfile(starname,author=author)
-    
-    # recall, MAST has a weird change in their observations table
-    # -dataURL ---> dataURI
-    # to make sure it's included, let's use a try and except technique    
-    try:
-        tpf = search_result[0].download(quality_bitmask='hardest',download_dir=save_directory) 
-        #will download only first observation [0]
-    except KeyError:
-        search_result.table['dataURL']  = search_result.table['dataURI']
-        tpf = search_result[0].download(quality_bitmask='hardest',download_dir=save_directory)
-    
-    #Step 2: Perform aperture photometry
-    if mask_threshold is None:
-        pixel_mask = tpf.pipeline_mask
-        background_mask = ~tpf.pipeline_mask
-    if mask_threshold is not None:
-        pixel_mask = tpf.create_threshold_mask(threshold=mask_threshold)
-        background_mask = ~tpf.create_threshold_mask(threshold=mask_threshold)
-
-    lc = tpf.to_lightcurve(aperture_mask=pixel_mask)
-    bkg = tpf.to_lightcurve(aperture_mask=background_mask)
-    
-    #Step 3: Perform Background Subtraction and Normalization
-    bkg_subtracted_flux=lc.flux.value - bkg.flux.value
-    
-    #create new "LightCurve" object
-    bkg_subtracted_lc = lk.LightCurve(time=lc.time.value,
-                                      flux=bkg_subtracted_flux,
-                                      flux_err = lc.flux_err.value)
-    
-    # normalize the background subtracted light curve
-    normalized_bkg_subtracted_lc =  bkg_subtracted_lc.normalize()
-    
-    outlier_removed_normalized_bkg_subtracted_lc = normalized_bkg_subtracted_lc.remove_outliers(sigma_upper=nsigma)
-    
-    # Step 4: Visualize the light curve
-    fig=plt.figure(figsize=(10,5))
-    ax1=fig.add_subplot(221)
-    ax2=fig.add_subplot(222)
-    
-    tpf.plot(aperture_mask=pixel_mask,mask_color='red',
-             ax=ax1,show_colorbar=True)
-    tpf.plot(aperture_mask=background_mask,mask_color='pink',
-             ax=ax1,show_colorbar=False)
-    
-    
-    ax2.set_title(starname+' in Sector '+str(tpf.sector))
-    
-    ax2.plot(normalized_bkg_subtracted_lc.time.value,
-             normalized_bkg_subtracted_lc.flux.value,
-           marker='.',color='red',linestyle='none')
-    
-    ax2.plot(outlier_removed_normalized_bkg_subtracted_lc.time.value,
-             outlier_removed_normalized_bkg_subtracted_lc.flux.value,
-           marker='.',color='black',linestyle='none')    
-  
-    ax2.set_xlabel('Time [Days]')
-    ax2.set_ylabel('Normalized Relative Flux')
-    fig.tight_layout(pad=1)
-    plt.savefig(save_directory+starname+'_Sector_'+str(tpf.sector)+'_lightcurve.png',
-                bbox_inches='tight')
-    plt.show()
-    
-    return outlier_removed_normalized_bkg_subtracted_lc
 
 def extract_TESS_photometry_and_smooth(starname,author,nsigma,
                                        save_directory, mask_threshold=None,
@@ -449,45 +353,48 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
         if t==0:
             normalized_bkg_subtracted_lcs=normalized_bkg_subtracted_lc
             outlier_removed_normalized_bkg_subtracted_lcs=outlier_removed_normalized_bkg_subtracted_lc
-            output_lc = smoothed_lc    
+            output_lc = smoothed_lc   
+            trend_lcs=trend_lc
         print(t)
         if t>0: 
             normalized_bkg_subtracted_lcs= normalized_bkg_subtracted_lcs.append(normalized_bkg_subtracted_lc)
             outlier_removed_normalized_bkg_subtracted_lcs= outlier_removed_normalized_bkg_subtracted_lcs.append(outlier_removed_normalized_bkg_subtracted_lc)
             output_lc = output_lc.append(smoothed_lc)
+            trend_lcs = trend_lcs.append(trend_lc)
             
-            
+    print('photom len check#1:',len(trend_lcs),len(output_lc),
+          len(outlier_removed_normalized_bkg_subtracted_lcs),len(normalized_bkg_subtracted_lcs))
     # Step 4: Visualize the light curve
-    fig=plt.figure(figsize=(10,5))
-    ax1=fig.add_subplot(221)
-    ax2=fig.add_subplot(222)
+#     fig=plt.figure(figsize=(10,5))
+#     ax1=fig.add_subplot(221)
+#     ax2=fig.add_subplot(222)
     
-    tpf.plot(aperture_mask=pixel_mask,mask_color='red',
-             ax=ax1,show_colorbar=True)
-    tpf.plot(aperture_mask=background_mask,mask_color='pink',
-             ax=ax1,show_colorbar=False)
+#     tpf.plot(aperture_mask=pixel_mask,mask_color='red',
+#              ax=ax1,show_colorbar=True)
+#     tpf.plot(aperture_mask=background_mask,mask_color='pink',
+#              ax=ax1,show_colorbar=False)
     
-    if len(Sectors_str)>1:
-        ax2.set_title(starname+' in Sectors '+str(Sectors_str))
-    else:
-        ax2.set_title(starname+' in Sector '+str(Sectors_str))
+#     if len(Sectors_str)>1:
+#         ax2.set_title(starname+' in Sectors '+str(Sectors_str))
+#     else:
+#         ax2.set_title(starname+' in Sector '+str(Sectors_str))
     
-    ax2.plot(normalized_bkg_subtracted_lcs.time.value,
-             normalized_bkg_subtracted_lcs.flux.value,
-           marker='.',color='red',linestyle='none')
+#     ax2.plot(normalized_bkg_subtracted_lcs.time.value,
+#              normalized_bkg_subtracted_lcs.flux.value,
+#            marker='.',color='red',linestyle='none')
     
-    ax2.plot(outlier_removed_normalized_bkg_subtracted_lcs.time.value,
-             outlier_removed_normalized_bkg_subtracted_lcs.flux.value,
-           marker='.',color='black',linestyle='none')    
+#     ax2.plot(outlier_removed_normalized_bkg_subtracted_lcs.time.value,
+#              outlier_removed_normalized_bkg_subtracted_lcs.flux.value,
+#            marker='.',color='black',linestyle='none')    
   
-    ax2.set_xlabel('Time [Days]')
-    ax2.set_ylabel('Normalized Relative Flux')
-    fig.tight_layout(pad=1)
-    plt.savefig(save_directory+starname+'_Sector_'+str(Sectors_str)+'_lightcurve.png',
-                bbox_inches='tight')
-    plt.show()            
+#     ax2.set_xlabel('Time [Days]')
+#     ax2.set_ylabel('Normalized Relative Flux')
+#     fig.tight_layout(pad=1)
+#     plt.savefig(save_directory+starname+'_Sector_'+str(Sectors_str)+'_lightcurve.png',
+#                 bbox_inches='tight')
+#     plt.show()            
         
-    return output_lc,Sectors_str
+    return output_lc,Sectors_str,tpfs[0],pixel_mask,background_mask,normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,trend_lcs
 
 
 def phasefold_version2(time,flux,flux_err,T0,Period):
@@ -633,8 +540,8 @@ def find_min_trial_duration(input_LC,durations,periods):
         binflux = np.full((nbins,), np.nan)
         binerr  = np.full((nbins,), np.nan)
         for i in range(0,nbins-1):
-            tobin = [np.where( (timefit >= (timemin + i*binsize)) & (timefit < (timemin + (i+1)*binsize)) )]
-            if len(tobin[0][0]) != 0:
+            tobin = np.where( (timefit >= (timemin + i*binsize)) & (timefit < (timemin + (i+1)*binsize)) )[0]
+            if len(tobin) != 0:         
                 # inverse variance weighted means
                 binflux[i] = ((fluxfit[tobin]/(errfit[tobin]**2.0)).sum()) / ((1.0/errfit[tobin]**2.0).sum())
                 bintime[i] = ((timefit[tobin]/(errfit[tobin]**2.0)).sum()) / ((1.0/errfit[tobin]**2.0).sum())
@@ -841,24 +748,114 @@ def BLS_function(starname, input_lc,min_period,max_period,R_star,M_star,
                                   period=periods,
                                   duration=durations)#,
                                   #frequency_factor=frequency_factor)
+        
+#     # calculating BLS Period, T0 and Duration
+    planet_period = bls.period_at_max_power
+    planet_t0 = bls.transit_time_at_max_power
+    planet_dur = bls.duration_at_max_power        
     
     #step 3: plotting BLS power spectra and calculating
     #        BLS Period, T0 and Duration
     
     #plotting power spectram AKA periodogram
-    fig=plt.figure(figsize=(10,5))
-    ax1=fig.add_subplot(211)
-    ax2=fig.add_subplot(212)
+#     fig=plt.figure(figsize=(10,5))
+#     ax0=fig.add_subplot(311)
+#     ax1=fig.add_subplot(312)
+#     ax2=fig.add_subplot(313)
     
-    bls.plot(color='black',lw=2,ax=ax1)
+#     ax0.scatter(input_lc.time.value,input_lc.flux.value,s=2,color='black')
+#     ax0.set_xlabel('Time [BTDJ]')
+#     ax0.set_ylabel('Normalized Relative Flux')
+    
+#     bls.plot(color='black',lw=2,ax=ax1)
+#     ax1.set_title(starname+' BLS Power Spectrum')
+   
+    
+
+#     ax1.axvline(x=planet_period.value,color='red',lw=3,alpha=0.5,zorder=-10)
+#     print('BLS period is ',planet_period)
+#     print('BLS reference time is',planet_t0)
+#     print('BLS duration is',planet_dur)
+#     print('')
+    
+    
+#     # step 4: phasefolding on BLS results
+    
+#     phase, flux, flux_err = phasefold_version2(input_lc.time.value,input_lc.flux.value,input_lc.flux_err.value,
+#                                                planet_t0.value, planet_period.value)
+    
+#     ax2.plot(phase*24,flux,'k.',markersize=3) #note phase2 x 24 makes phase in units of hours, not days like above
+#     ax2.set_xlabel('Orbital Phase [Hours since T0]\nzoomed in +/- 3 transit durations')
+#     ax2.set_ylabel('Normalized Relative Flux')
+#     ax2.set_xlim(-3.5*planet_dur.value*24,3.5*planet_dur.value*24)
+#     ax2.axvline(x=0)
+#     fig.tight_layout(pad=1)
+#     fig.savefig(starname+'_BLS_result.png',bbox_inches='tight')
+#     plt.show()
+    
+    
+    return bls,planet_period.value, planet_t0.value, planet_dur.value
+
+
+def plot_results(starname,tpf,sectors,pixel_mask,background_mask,
+                 normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,
+                 input_lc,trend_lcs,
+                 bls,planet_period, planet_t0, planet_dur):
+    
+    import matplotlib.gridspec as gridspec
+    fig = plt.figure(constrained_layout=True,figsize=(10,10))
+    gs = fig.add_gridspec(5, 2)
+    ax_im = fig.add_subplot(gs[0, 0])
+    ax_lc = fig.add_subplot(gs[0, 1])
+    ax_lc2 = fig.add_subplot(gs[1,:])
+    ax1 = fig.add_subplot(gs[2,:])
+    ax2 = fig.add_subplot(gs[3,:])
+
+    
+    tpf.plot(aperture_mask=pixel_mask,mask_color='red',
+             ax=ax_im,show_colorbar=False,title=None)
+    tpf.plot(aperture_mask=background_mask,mask_color='pink',
+             ax=ax_im,show_colorbar=False,title=None)    
+    ax_im.title.set_visible(not ax_im.title.get_visible())
+    
+    
+    ax_lc.set_title(starname+' in Sectors '+str(sectors))
+    
+    ax_lc.plot(normalized_bkg_subtracted_lcs.time.value,
+             normalized_bkg_subtracted_lcs.flux.value,
+           marker='.',color='red',linestyle='none')
+    
+    ax_lc.plot(outlier_removed_normalized_bkg_subtracted_lcs.time.value,
+             outlier_removed_normalized_bkg_subtracted_lcs.flux.value,
+           marker='.',color='black',linestyle='none')    
+    ax_lc.plot(trend_lcs.time.value,trend_lcs.flux.value,'r-')
+  
+    ax_lc.set_xlabel('Time [Days]')
+    ax_lc.set_ylabel('Normalized\nRelative Flux')
+    
+    ax_lc2.scatter(input_lc.time.value,input_lc.flux.value,s=2,color='black')
+    ax_lc2.set_xlabel('Time [BTDJ]')
+    ax_lc2.set_ylabel('Normalized\nRelative Flux')
+    
+    #bls.plot(color='black',lw=2,ax=ax1)
+    ax1.plot(bls.period,
+             (bls.power-np.nanmean(bls.power))/np.nanstd(bls.power),
+             color='black',lw=2)
     ax1.set_title(starname+' BLS Power Spectrum')
+    ax1.set_xlabel('Period [days]')
+    ax1.set_ylabel('Standardized\nBLS Power')
    
     
     # calculating BLS Period, T0 and Duration
     planet_period = bls.period_at_max_power
     planet_t0 = bls.transit_time_at_max_power
     planet_dur = bls.duration_at_max_power
-    ax1.axvline(x=planet_period.value,color='red',lw=3,alpha=0.5,zorder=-10)
+    ax1.axvline(x=planet_period.value,color='red',linestyle='-',lw=3,alpha=0.5,zorder=-10)
+    for i in range(2,15):
+        if planet_period.value*i<np.nanmax(input_lc.time.value):
+            ax1.axvline(x=planet_period.value*i,color='red',linestyle='--',lw=2,alpha=0.5,zorder=-10)
+        if planet_period.value/i>np.nanmin(input_lc.time.value):
+            ax1.axvline(x=planet_period.value/i,color='red',linestyle='--',lw=2,alpha=0.5,zorder=-10)
     print('BLS period is ',planet_period)
     print('BLS reference time is',planet_t0)
     print('BLS duration is',planet_dur)
@@ -872,16 +869,13 @@ def BLS_function(starname, input_lc,min_period,max_period,R_star,M_star,
     
     ax2.plot(phase*24,flux,'k.',markersize=3) #note phase2 x 24 makes phase in units of hours, not days like above
     ax2.set_xlabel('Orbital Phase [Hours since T0]\nzoomed in +/- 3 transit durations')
-    ax2.set_ylabel('Normalized Relative Flux')
+    ax2.set_ylabel('Normalized\nRelative Flux')
     ax2.set_xlim(-3.5*planet_dur.value*24,3.5*planet_dur.value*24)
     ax2.axvline(x=0)
     fig.tight_layout(pad=1)
     fig.savefig(starname+'_BLS_result.png',bbox_inches='tight')
     plt.show()
     
-    
-    return planet_period.value, planet_t0.value, planet_dur.value
-
 
 def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
              window_size_in_days,filter_type,
@@ -957,13 +951,15 @@ def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
         R_star = radius_from_mass(M_star)      
     #
     # Step 1: create lightcurve using lightkurve and smooth data before transit searching
-    smoothed_lc,Sectors = extract_TESS_photometry_and_smooth(starname=starname,
+    step_1_results = extract_TESS_photometry_and_smooth(starname=starname,
                                                        author=author,nsigma=nsigma,
                                                        mask_threshold=mask_threshold,
                                                        save_directory=save_directory,
                                                      Sector=Sector, window_size_in_days=window_size_in_days,
                                                      verbose=verbose,filter_type=filter_type)
-    
+    #
+    smoothed_lc,Sectors,tpf0,pixel_mask,background_mask,normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,trend_lcs = step_1_results
+    #
     #remove outliers again after smoothing
     smoothed_lc=smoothed_lc.remove_outliers(sigma_upper=nsigma,sigma_lower=5*nsigma)
     
@@ -982,7 +978,7 @@ def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
 #                                               verbose=verbose,filter_type=filter_type)
     
     # Step 3: search lightcurve for transits with BLS
-    planet_period, planet_t0, planet_dur = BLS_function(starname, smoothed_lc,
+    bls, planet_period, planet_t0, planet_dur = BLS_function(starname, smoothed_lc,
                                                         min_period,max_period,R_star,M_star,
                                                         oversampling_factor=oversampling_factor,
                                                         duration_grid_step=duration_grid_step)
@@ -994,4 +990,12 @@ def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
 #                                                         frequency_factor=frequency_factor)
     
     output_lc = smoothed_lc
+    
+    
+    plot_results(starname,tpf0,Sectors,pixel_mask,background_mask,
+                 normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,
+                 output_lc,trend_lcs,
+                 bls,planet_period, planet_t0, planet_dur)
+    
+    
     return output_lc, planet_period, planet_t0, planet_dur    

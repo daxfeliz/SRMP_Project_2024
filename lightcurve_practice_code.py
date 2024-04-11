@@ -2,6 +2,7 @@ import os
 import lightkurve as lk
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 def download_data(starname,mission,quarter_number,cadence,verbose=True):
     from lightkurve.search import _search_products
@@ -292,9 +293,47 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
               'light curves are not yet available.')
         print(' ')
         return search_string[mask]
-
+    #
     search_result = get_primary_mission_sectors(search_result)
     print('processing',len(search_result),'data products:')
+    
+#     if len(search_result)<1:
+#         print('no SPOC data to extract! \n switching from 2-minute cadence to 30-minute cadence!')
+#         search_result=download_data(starname,mission='TESS',
+#                                     quarter_number=Sector,
+#                                     cadence='30 minute',verbose=False)
+#         N_data_products=len(search_result)
+#         while N_data_products<1:
+#             # see which LC has the most data
+#             search_result_20s=download_data(starname,mission='TESS',
+#                                             quarter_number=Sector,
+#                                             cadence='20 second',verbose=False)
+#             search_result_10m=download_data(starname,mission='TESS',
+#                                             quarter_number=Sector,
+#                                             cadence='10 minute',verbose=False)
+#             search_result_30m=download_data(starname,mission='TESS',
+#                                             quarter_number=Sector,
+#                                             cadence='30 minute',verbose=False)
+#             #
+#             results=[len(search_result_20s), len(search_result_10m),len(search_result_30m)]
+#             most_data_index = np.argmax(results)
+#             if most_data_index==0:
+#                 print('most data for 20s cadence')
+#                 most_data = search_result_20s
+#             if most_data_index==1:
+#                 print('most data for 10m cadence')
+#                 most_data = search_result_10m
+#             if most_data_index==2:
+#                 print('most data for 30m cadence')        
+#                 most_data = search_result_30m
+#             N_data_products+=len(most_data)
+
+#             search_result = most_data
+#             break        
+#         search_result = get_primary_mission_sectors(search_result)
+#         print('processing',len(search_result),'data products:')
+    
+    
     Sectors=np.unique(search_result.mission)
     print(np.unique(search_result.mission))
     print(' ')
@@ -314,19 +353,44 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
         if mask_threshold is not None:
             pixel_mask = tpf.create_threshold_mask(threshold=mask_threshold)
             background_mask = ~tpf.create_threshold_mask(threshold=mask_threshold)
-
-        quality_mask = tpf.quality==0
-        lc = tpf.to_lightcurve(aperture_mask=pixel_mask)
-        bkg = tpf.to_lightcurve(aperture_mask=background_mask)
-        lc = lc[quality_mask]
-        bkg = bkg[quality_mask]
-
+        #check if pixel mask is any good
+        if pixel_mask.sum() == 0:
+            new_threshold=3
+        while pixel_mask.sum() == 0:
+            new_threshold+=1
+            print('trying',new_threshold,'threshold')
+            pixel_mask = tpf.create_threshold_mask(threshold=new_threshold)
+        #
+        from lightkurve.correctors import PLDCorrector
+        try:
+            corrector = PLDCorrector(tpf[tpf.quality==0],aperture_mask=pixel_mask)
+            lc = corrector.correct(pca_components=10,pld_aperture_mask=pixel_mask,background_aperture_mask=background_mask)
+            bkgcorrector = PLDCorrector(tpf[tpf.quality==0],aperture_mask=background_mask)
+            bkg = bkgcorrector.correct(pca_components=10,pld_aperture_mask=background_mask,background_aperture_mask=pixel_mask)
+        except ValueError:
+            print('Bad Pixel mask. Could not do PLD!')
+            print('')            
+            lc = tpf[tpf.quality==0].to_lightcurve(aperture_mask=pixel_mask)
+            bkg = tpf[tpf.quality==0].to_lightcurve(aperture_mask=background_mask)
+        #print('c0',len(lc),len(tpf))
+#         quality_mask = tpf.quality==0
+#         lc = lc[quality_mask]
+#         bkg = bkg[quality_mask]        
+        #print('c1',len(lc),len(bkg))
         #Step 3: Perform Background Subtraction and Normalization
-        bkg_subtracted_flux=lc.flux.value - bkg.flux.value
+        Npixbkg = len(np.where(background_mask == True)[0])
+        Npixaper= len(np.where(pixel_mask == True)[0])
+        #
+        bkgFlux = bkg.flux.value/Npixbkg #normalize background
+        #
+        rawsap_flux = lc.flux.value - (bkgFlux * Npixaper)
+        #print('c2',rawsap_flux)
+        
 
-        #create new "LightCurve" object
+
+        #create new "LightCurve" objects
         bkg_subtracted_lc = lk.LightCurve(time=lc.time.value,
-                                          flux=bkg_subtracted_flux,
+                                          flux=rawsap_flux,
                                           flux_err = lc.flux_err.value)
 
         # normalize the background subtracted light curve
@@ -339,6 +403,8 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
 
         # Rename output light curve from Step 1:
         input_lc = outlier_removed_normalized_bkg_subtracted_lc
+        #print('end step 1 inputlc type:',type(input_lc))
+        #print(input_lc.time.value)
 
         # Step 2: Smoothing light curve before transit searching (NEW STEP)
         ID=int(starname[4:]) #assuming it begins with 'TIC '
@@ -362,8 +428,8 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
             output_lc = output_lc.append(smoothed_lc)
             trend_lcs = trend_lcs.append(trend_lc)
             
-    print('photom len check#1:',len(trend_lcs),len(output_lc),
-          len(outlier_removed_normalized_bkg_subtracted_lcs),len(normalized_bkg_subtracted_lcs))
+    #print('photom len check#1:',len(trend_lcs),len(output_lc),
+#           len(outlier_removed_normalized_bkg_subtracted_lcs),len(normalized_bkg_subtracted_lcs))
     # Step 4: Visualize the light curve
 #     fig=plt.figure(figsize=(10,5))
 #     ax1=fig.add_subplot(221)
@@ -735,10 +801,18 @@ def BLS_function(starname, input_lc,min_period,max_period,R_star,M_star,
 #     duration_grid=np.linspace(min_dur  ,max_dur,N_durations)
     #
     LC_time_span = (np.max(input_lc.time.value)-np.min(input_lc.time.value)) #time span of light curve
+    if max_period > LC_time_span:
+        max_period = LC_time_span/2
+        print('recalculated max period based on light curve time span:',max_period)
+#     else:
+#         print('max period and light curve time span:',max_period,LC_time_span)
     #
     periods = period_grid(R_star=R_star, M_star=M_star, time_span=LC_time_span,\
                               period_min=min_period, period_max=max_period,
                               oversampling_factor=oversampling_factor)
+    if max_period!=np.max(periods):
+        max_period=np.max(periods)
+        print('recalculated max period based on period grid and input light curve:',max_period)
     #
     durations= duration_grid(periods,shortest=None,log_step=duration_grid_step)
     durations = find_min_trial_duration(input_lc,durations,periods)
@@ -797,10 +871,17 @@ def BLS_function(starname, input_lc,min_period,max_period,R_star,M_star,
     return bls,planet_period.value, planet_t0.value, planet_dur.value
 
 
+def calc_planet_radius(BLS_Depth,R_star):
+    from astropy import units as u
+    R_earth = u.R_earth.to(u.cm)
+    R_sun = u.R_sun.to(u.cm)
+    R_p = np.sqrt(BLS_Depth)*R_star*R_sun/R_earth
+    return R_p
+
 def plot_results(starname,tpf,sectors,pixel_mask,background_mask,
                  normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,
                  input_lc,trend_lcs,
-                 bls,planet_period, planet_t0, planet_dur):
+                 bls,planet_period, planet_t0, planet_dur,R_star,savepath):
     
     import matplotlib.gridspec as gridspec
     fig = plt.figure(constrained_layout=True,figsize=(10,10))
@@ -828,14 +909,25 @@ def plot_results(starname,tpf,sectors,pixel_mask,background_mask,
     ax_lc.plot(outlier_removed_normalized_bkg_subtracted_lcs.time.value,
              outlier_removed_normalized_bkg_subtracted_lcs.flux.value,
            marker='.',color='black',linestyle='none')    
-    ax_lc.plot(trend_lcs.time.value,trend_lcs.flux.value,'r-')
-  
+    ax_lc.scatter(trend_lcs.time.value,trend_lcs.flux.value,linestyle='-',color='orange',s=2,zorder=10)  
     ax_lc.set_xlabel('Time [Days]')
     ax_lc.set_ylabel('Normalized\nRelative Flux')
+    ax_lc.set_ylim(np.nanmedian(normalized_bkg_subtracted_lcs.flux.value)-5*np.nanstd(normalized_bkg_subtracted_lcs.flux.value),
+                   np.nanmedian(normalized_bkg_subtracted_lcs.flux.value)+5*np.nanstd(normalized_bkg_subtracted_lcs.flux.value))
     
     ax_lc2.scatter(input_lc.time.value,input_lc.flux.value,s=2,color='black')
     ax_lc2.set_xlabel('Time [BTDJ]')
     ax_lc2.set_ylabel('Normalized\nRelative Flux')
+    ax_lc2.set_ylim(np.nanmedian(input_lc.flux.value)-5*np.nanstd(input_lc.flux.value),
+                   np.nanmedian(input_lc.flux.value)+5*np.nanstd(input_lc.flux.value))
+    #
+    ax_lc.axvline(x=planet_t0,color='cyan',zorder=-10)
+    ax_lc2.axvline(x=planet_t0,color='cyan',zorder=-10)
+    nextt0=planet_t0+planet_period
+    while nextt0<=np.nanmax(input_lc.time.value):
+        ax_lc.axvline(x=nextt0,color='cyan',zorder=-10)
+        ax_lc2.axvline(x=nextt0,color='cyan',zorder=-10)
+        nextt0+=planet_period
     
     #bls.plot(color='black',lw=2,ax=ax1)
     ax1.plot(bls.period,
@@ -850,11 +942,16 @@ def plot_results(starname,tpf,sectors,pixel_mask,background_mask,
     planet_period = bls.period_at_max_power
     planet_t0 = bls.transit_time_at_max_power
     planet_dur = bls.duration_at_max_power
+    planet_depth = bls.depth_at_max_power
     ax1.axvline(x=planet_period.value,color='red',linestyle='-',lw=3,alpha=0.5,zorder=-10)
+    
+    LC_time_span = (np.max(input_lc.time.value)-np.min(input_lc.time.value)) #time span of light curve
+    max_period = LC_time_span/2
+    
     for i in range(2,15):
-        if planet_period.value*i<np.nanmax(input_lc.time.value):
+        if planet_period.value*i<=np.max(bls.period.value):
             ax1.axvline(x=planet_period.value*i,color='red',linestyle='--',lw=2,alpha=0.5,zorder=-10)
-        if planet_period.value/i>np.nanmin(input_lc.time.value):
+        if planet_period.value/i>=np.min(bls.period.value):
             ax1.axvline(x=planet_period.value/i,color='red',linestyle='--',lw=2,alpha=0.5,zorder=-10)
     print('BLS period is ',planet_period)
     print('BLS reference time is',planet_t0)
@@ -863,18 +960,52 @@ def plot_results(starname,tpf,sectors,pixel_mask,background_mask,
     
     
     # step 4: phasefolding on BLS results
+    #BLS_model=bls.model(input_lc.time.value, planet_period.value, planet_dur.value, planet_t0.value)
+    BLS_model=bls.get_transit_model(period=planet_period.value, duration=planet_dur.value, transit_time=planet_t0.value)
+    print(type(BLS_model))
     
     phase, flux, flux_err = phasefold_version2(input_lc.time.value,input_lc.flux.value,input_lc.flux_err.value,
                                                planet_t0.value, planet_period.value)
     
+    model_phase, model_flux, model_flux_err = phasefold_version2(input_lc.time.value,BLS_model.flux.value,
+                                                                 input_lc.flux_err.value,
+                                                                 planet_t0.value, planet_period.value)    
+    
     ax2.plot(phase*24,flux,'k.',markersize=3) #note phase2 x 24 makes phase in units of hours, not days like above
+    ax2.plot(model_phase*24, model_flux,'r-',markersize=3)
     ax2.set_xlabel('Orbital Phase [Hours since T0]\nzoomed in +/- 3 transit durations')
     ax2.set_ylabel('Normalized\nRelative Flux')
     ax2.set_xlim(-3.5*planet_dur.value*24,3.5*planet_dur.value*24)
-    ax2.axvline(x=0)
+    ax2.axvline(x=0,zorder=-10)
+    ax2.axvline(x=0-planet_dur.value*24/2,color='red',lw=0.5,linestyle='--',zorder=-10)
+    ax2.axvline(x=0+planet_dur.value*24/2,color='red',lw=0.5,linestyle='--',zorder=-10)
+    #
+    m = np.where(np.abs(phase)<3*planet_dur.value)[0]
+    scale = 2*np.nanstd(flux[m])
+    ax2.set_ylim(np.nanmin(flux[m])-scale, np.nanmax(flux[m])+scale)
+    
+    BLS_P = planet_period.value #in days
+    BLS_T0 = planet_t0.value #in BTJD
+    BLS_Dur=planet_dur.value*24 #in hours
+    BLS_Depth = planet_depth.value
+    BLS_RP = calc_planet_radius(BLS_Depth,R_star)
+    BLS_SDE = ((bls.power-np.nanmean(bls.power))/np.nanstd(bls.power))[np.argmax(bls.power)]
+    
+    BLS_df = pd.DataFrame({'starname':starname,
+                          'Planet Radius [Earth Radii]':BLS_RP,
+                          'Period [days]':BLS_P,
+                          'Transit Duration [hours]':BLS_Dur,
+                          'Transit Epoch [BTJD]':BLS_T0,
+                          'BLS SDE':BLS_SDE}, index=[0])
+    
+    ax2.set_title('BLS Planet Radius '+str(np.round(BLS_RP,3))+r' R$_{\oplus}$ ; Period: '+str(np.round(BLS_P,3))+' d ; Duration: '+str(np.round(BLS_Dur,3))+' hrs ; SDE: '+str(np.round(BLS_SDE,3)) )
+    #
     fig.tight_layout(pad=1)
-    fig.savefig(starname+'_BLS_result.png',bbox_inches='tight')
+    starname2 = 'TIC_'+str(int(starname[4:]))
+    fig.savefig(savepath+starname2+'_BLS_result.png',bbox_inches='tight')
     plt.show()
+    
+    BLS_df.to_csv(savepath+starname2+'_BLS_result.csv',index=False)
     
 
 def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
@@ -951,13 +1082,13 @@ def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
         R_star = radius_from_mass(M_star)      
     #
     # Step 1: create lightcurve using lightkurve and smooth data before transit searching
+    #try: #see if you can get data for requested cadence and author
     step_1_results = extract_TESS_photometry_and_smooth(starname=starname,
                                                        author=author,nsigma=nsigma,
                                                        mask_threshold=mask_threshold,
                                                        save_directory=save_directory,
                                                      Sector=Sector, window_size_in_days=window_size_in_days,
                                                      verbose=verbose,filter_type=filter_type)
-    #
     smoothed_lc,Sectors,tpf0,pixel_mask,background_mask,normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,trend_lcs = step_1_results
     #
     #remove outliers again after smoothing
@@ -995,7 +1126,7 @@ def pipeline(starname, author, Sector, mask_threshold, nsigma, save_directory,
     plot_results(starname,tpf0,Sectors,pixel_mask,background_mask,
                  normalized_bkg_subtracted_lcs,outlier_removed_normalized_bkg_subtracted_lcs,
                  output_lc,trend_lcs,
-                 bls,planet_period, planet_t0, planet_dur)
+                 bls,planet_period, planet_t0, planet_dur,R_star,save_directory)
     
     
     return output_lc, planet_period, planet_t0, planet_dur    

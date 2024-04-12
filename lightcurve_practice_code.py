@@ -3,6 +3,7 @@ import lightkurve as lk
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from lightkurve.search import SearchError
 
 def download_data(starname,mission,quarter_number,cadence,verbose=True):
     from lightkurve.search import _search_products
@@ -87,23 +88,28 @@ def catalog_info(TIC_ID):
     from os import path
     import time as clock
     try:
-        from astroquery.mast import Catalogs
-    except:
-        raise ImportError("Package astroquery required but failed to import")
-    #
-    #
-    #
-    result = Catalogs.query_criteria(catalog="Tic", ID=TIC_ID).as_array()
-    Teff = float(result['Teff'].data)
-    logg = float(result['logg'].data)
-    radius = float(result['rad'].data)
-    radius_max = float(result['e_rad'].data)
-    radius_min = float(result['e_rad'].data)
-    mass = float(result['mass'].data)
-    mass_max = float(result['e_mass'].data)
-    mass_min = float(result['e_mass'].data)
-    
-    return (mass, mass_min, mass_max, radius, radius_min, radius_max)
+        try:
+            from astroquery.mast import Catalogs
+        except:
+            raise ImportError("Package astroquery required but failed to import")
+        #
+        #
+        #
+        result = Catalogs.query_criteria(catalog="Tic", ID=TIC_ID).as_array()
+        Teff = float(result['Teff'].data)
+        logg = float(result['logg'].data)
+        radius = float(result['rad'].data)
+        radius_max = float(result['e_rad'].data)
+        radius_min = float(result['e_rad'].data)
+        mass = float(result['mass'].data)
+        mass_max = float(result['e_mass'].data)
+        mass_min = float(result['e_mass'].data)
+
+        return (mass, mass_min, mass_max, radius, radius_min, radius_max)
+    except KeyError:
+        from transitleastsquares import catalog_info
+        qld, M_star, M_star_min, M_star_max, R_star, R_star_min, R_star_max = catalog_info(TIC_ID=ID)
+        return (M_star, M_star_min, M_star_max, R_star, R_star_min, R_star_max)
 
 def SMA_AU_from_Period_to_stellar(Period,R_star,M_star):
     """
@@ -357,9 +363,13 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
         if pixel_mask.sum() == 0:
             new_threshold=3
         while pixel_mask.sum() == 0:
-            new_threshold+=1
+            new_threshold+=0.5
             print('trying',new_threshold,'threshold')
             pixel_mask = tpf.create_threshold_mask(threshold=new_threshold)
+            if new_threshold>=10:
+                pixel_mask=tpf.pipeline_mask
+                background_mask=~tpf.pipeline_mask
+            #NEEDS A BREAK CONDITION! THIS CAN AND WILL GO FOREVER!
         #
         from lightkurve.correctors import PLDCorrector
         try:
@@ -396,7 +406,7 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
         # normalize the background subtracted light curve
         normalized_bkg_subtracted_lc =  bkg_subtracted_lc.normalize()
 
-        outlier_removed_normalized_bkg_subtracted_lc = normalized_bkg_subtracted_lc.remove_outliers(sigma_upper=nsigma)
+        outlier_removed_normalized_bkg_subtracted_lc = normalized_bkg_subtracted_lc#.remove_outliers(sigma_upper=nsigma)
         
         # rename
         input_lc = outlier_removed_normalized_bkg_subtracted_lc
@@ -412,7 +422,8 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
                                                   window_size_in_days=window_size_in_days,
                                                   verbose=verbose,filter_type=filter_type)
         #remove outliers again after smoothing
-        #smoothed_lc.remove_outliers(sigma_upper=nsigma,sigma_lower=2*nsigma)
+        smoothed_lc,outlier_mask=smoothed_lc.remove_outliers(sigma_upper=nsigma,return_mask=True)
+        outlier_removed_normalized_bkg_subtracted_lc=outlier_removed_normalized_bkg_subtracted_lc[~outlier_mask]
 #         smoothed_lc.scatter()
     #     plt.title('Sector '+str(tpf.sector))
     #     plt.show()

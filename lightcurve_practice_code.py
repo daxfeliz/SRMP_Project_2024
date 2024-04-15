@@ -248,7 +248,7 @@ def smoothing_function(ID,input_LC,window_size_in_days=None,verbose=True,filter_
     trend_lc=trend_lc[nanmask]
     newlc = lk.LightCurve(time=T,flux=F,flux_err=FE)
     trend = lk.LightCurve(time=time[nanmask],flux=trend_lc,flux_err=flux_error[nanmask])
-    return newlc, trend
+    return newlc, trend, nanmask
 
 
 def extract_TESS_photometry_and_smooth(starname,author,nsigma,
@@ -418,24 +418,25 @@ def extract_TESS_photometry_and_smooth(starname,author,nsigma,
 
         # Step 2: Smoothing light curve before transit searching (NEW STEP)
         ID=int(starname[4:]) #assuming it begins with 'TIC '
-        smoothed_lc,trend_lc = smoothing_function(ID,input_lc,
+        smoothed_lc,trend_lc, nanmask = smoothing_function(ID,input_lc,
                                                   window_size_in_days=window_size_in_days,
                                                   verbose=verbose,filter_type=filter_type)
+        input_lc=input_lc[nanmask]
         #remove outliers again after smoothing
         smoothed_lc,outlier_mask=smoothed_lc.remove_outliers(sigma_upper=nsigma,return_mask=True)
-        outlier_removed_normalized_bkg_subtracted_lc=outlier_removed_normalized_bkg_subtracted_lc[~outlier_mask]
+        outlier_removed_normalized_bkg_subtracted_lc=input_lc[~outlier_mask]
 #         smoothed_lc.scatter()
     #     plt.title('Sector '+str(tpf.sector))
     #     plt.show()
         if t==0:
             normalized_bkg_subtracted_lcs=normalized_bkg_subtracted_lc
-            outlier_removed_normalized_bkg_subtracted_lcs=outlier_removed_normalized_bkg_subtracted_lc
+            outlier_removed_normalized_bkg_subtracted_lcs=input_lc
             output_lc = smoothed_lc   
             trend_lcs=trend_lc
         print(t)
         if t>0: 
             normalized_bkg_subtracted_lcs= normalized_bkg_subtracted_lcs.append(normalized_bkg_subtracted_lc)
-            outlier_removed_normalized_bkg_subtracted_lcs= outlier_removed_normalized_bkg_subtracted_lcs.append(outlier_removed_normalized_bkg_subtracted_lc)
+            outlier_removed_normalized_bkg_subtracted_lcs= outlier_removed_normalized_bkg_subtracted_lcs.append(input_lc)
             output_lc = output_lc.append(smoothed_lc)
             trend_lcs = trend_lcs.append(trend_lc)
             
